@@ -20,7 +20,7 @@ from hw1_imitation.data import (
     load_pusht_zarr,
 )
 from hw1_imitation.model import build_policy, PolicyType
-from hw1_imitation.evaluation import Logger
+from hw1_imitation.evaluation import Logger, evaluate_policy
 
 LOGDIR_PREFIX = "exp"
 
@@ -128,6 +128,42 @@ def run_training(config: TrainConfig) -> None:
     logger = Logger(log_dir)
 
     ### TODO: PUT YOUR MAIN TRAINING LOOP HERE ###
+    optimizer = torch.optim.AdamW(
+        model.parameters(),
+        lr=3e-4,
+        weight_decay=1e-2
+    )
+    loader = DataLoader(dataset, batch_size=config.batch_size, shuffle=True)
+    loss = []
+    step = 0
+    for epoch in config.num_epochs:
+        model.train()
+        for batch in loader:
+            state, action_chunk = batch
+            state = state.to(device)
+            action_chunk = action_chunk.to(device)
+
+            optimizer.zero_grad()
+            loss = model.compute_loss(state, action_chunk)
+            loss.backward()
+            optimizer.step()
+            step += 1
+            if step % config.log_interval == 0:
+                loss.append(loss.item())
+                print(f"loss: {loss.item()}")
+            if step % config.eval_interval == 0:
+                evaluate_policy(
+                    model=model,
+                    normalizer=normalizer,
+                    device=device,
+                    chunk_size=config.chunk_size,
+                    video_size=config.video_size,
+                    num_video_episodes= config.num_video_episodes,
+                    flow_num_steps=config.flow_num_steps,
+                    step=step,
+                    logger=logger
+                )
+
 
     logger.dump_for_grading()
 
