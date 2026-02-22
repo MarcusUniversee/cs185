@@ -67,6 +67,11 @@ class PGAgent(nn.Module):
         # TODO: flatten the lists of arrays into single arrays, so that the rest of the code can be written in a vectorized
         # way. obs, actions, rewards, terminals, and q_values should all be arrays with a leading dimension of `batch_size`
         # beyond this point.
+        obs = np.concatenate(obs)
+        actions = np.concatenate(actions)
+        rewards = np.concatenate(rewards)
+        terminals = np.concatenate(terminals)
+        q_values = np.concatenate(q_values)
 
         # step 2: calculate advantages from Q values
         advantages: np.ndarray = self._estimate_advantage(
@@ -75,7 +80,7 @@ class PGAgent(nn.Module):
 
         # step 3: use all datapoints (s_t, a_t, adv_t) to update the PG actor/policy
         # TODO: update the PG actor/policy network once using the advantages
-        info: dict = None
+        info: dict = self.actor.update(obs, actions, advantages)
 
         # step 4: if needed, use all datapoints (s_t, a_t, q_t) to update the PG critic/baseline
         if self.critic is not None:
@@ -94,14 +99,26 @@ class PGAgent(nn.Module):
         Note that all entries of the output list should be the exact same because each sum is from 0 to T (and doesn't
         involve t)!
         """
-        return None
+        reward_tensor = torch.as_tensor(rewards, dtype=torch.float64).flatten()
+        steps = torch.arange(len(reward_tensor)) # 0 to H-1
+        gammas = torch.pow(self.gamma, steps)
+        disc_return = torch.sum(gammas*reward_tensor).item()
+
+        return [disc_return] * len(reward_tensor)
 
     def _discounted_reward_to_go(self, rewards: Sequence[float]) -> Sequence[float]:
         """
         Helper function which takes a list of rewards {r_0, r_1, ..., r_t', ... r_T} and returns a list where the entry
         in each index t is sum_{t'=t}^T gamma^(t'-t) * r_{t'}.
         """
-        return None
+        reward_tensor = torch.as_tensor(rewards, dtype=torch.float64).flatten()
+        disc_return = torch.zeros(len(reward_tensor), dtype=torch.float64)
+
+        running_sum = 0
+        for t in reversed(range(len(reward_tensor))):
+            running_sum = reward_tensor[t] + self.gamma * running_sum # new reward has gamma^0
+            disc_return[t] = running_sum
+        return disc_return
 
     def _calculate_q_vals(self, rewards: Sequence[np.ndarray]) -> Sequence[np.ndarray]:
         """Monte Carlo estimation of the Q function."""
@@ -111,12 +128,16 @@ class PGAgent(nn.Module):
             # trajectory at each point.
             # In other words: Q(s_t, a_t) = sum_{t'=0}^T gamma^t' r_{t'}
             # TODO: use the helper function self._discounted_return to calculate the Q-values
-            q_values = None
+            q_values = []
+            for r in rewards:
+                q_values.append(np.array(self._discounted_return(r)))
         else:
             # Case 2: in reward-to-go PG, we only use the rewards after timestep t to estimate the Q-value for (s_t, a_t).
             # In other words: Q(s_t, a_t) = sum_{t'=t}^T gamma^(t'-t) * r_{t'}
             # TODO: use the helper function self._discounted_reward_to_go to calculate the Q-values
-            q_values = None
+            q_values = []
+            for r in rewards:
+                q_values.append(np.array(self._discounted_reward_to_go(r)))
 
         return q_values
 
@@ -133,10 +154,10 @@ class PGAgent(nn.Module):
         """
         if self.critic is None:
             # TODO: if no baseline, then what are the advantages?
-            advantages = None
+            advantages = q_values
         else:
             # TODO: run the critic and use it as a baseline
-            values = None
+            values = self.critic(obs)
             assert values.shape == q_values.shape
 
             if self.gae_lambda is None:
@@ -161,6 +182,6 @@ class PGAgent(nn.Module):
 
         # TODO: normalize the advantages to have a mean of zero and a standard deviation of one within the batch
         if self.normalize_advantages:
-            pass
+            advantages = (advantages - np.sum(advantages))/(1e-8 + np.std(advantages))
 
         return advantages
