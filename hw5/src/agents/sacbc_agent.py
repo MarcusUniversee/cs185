@@ -3,6 +3,7 @@ import torch
 from torch import nn
 import numpy as np
 import infrastructure.pytorch_util as ptu
+import torch.nn.functional as F
 
 from typing import Callable, Optional, Sequence, Tuple, List
 
@@ -64,8 +65,22 @@ class SACBCAgent(nn.Module):
         Update Q(s, a)
         """
         # TODO(student): Compute the Q loss
-        q = ...
-        loss = ...
+        with torch.no_grad():
+            # print("rewards", rewards.shape)
+            # print("dones", dones.shape)
+            # print("critic", self.critic(observations, actions).shape)
+            # print("rewards dtype", rewards.dtype)
+            # print("dones dtype", dones.dtype)
+            next_actions = self.actor(next_observations).rsample()
+            
+            # y = rewards + (1 - dones) * (self.discount / 2) * (self.target_critic1(next_observations, next_actions).mean(dim=0) + self.target_critic2(next_observations, next_actions).mean(dim=0))
+
+            y = rewards + (1 - dones) * self.discount * self.target_critic(next_observations, next_actions).mean(dim=0)
+
+        # q = torch.stack([self.critic1(observations, actions).mean(dim=0), self.critic2(observations, actions).mean(dim=0)])
+
+        q = self.critic(observations, actions)
+        loss = F.mse_loss(q[0], y) + F.mse_loss(q[1], y)
 
         self.critic_optimizer.zero_grad()
         loss.backward()
@@ -88,12 +103,22 @@ class SACBCAgent(nn.Module):
         Update the actor
         """
         # TODO(student): Compute the actor loss
-        q_loss = ...
+        #a^pi sampled from a?
+        action_distribution = self.actor(observations)
+        a_pi = action_distribution.rsample()
+        log_probs = action_distribution.log_prob(a_pi).sum(dim=-1, keepdim=True)
+        
+        # -1/2 (Q_1 + Q_2)
+        # q_loss = -0.5*(self.critic1(observations, a_pi).mean(dim=0) + self.critic2(observations, a_pi).mean(dim=0)).mean()
+        q_loss = -self.critic(observations, a_pi).mean()
+        #mse(a, a^pi). already averages over the action dim
+        mses = F.mse_loss(actions, a_pi)
 
-        mses = ...
-        bc_loss = ...
+        #mses * alpha/|A|
+        bc_loss = mses * self.alpha
 
-        entropy_loss = ...
+        # beta*log(actor(a^pi))
+        entropy_loss = (self.beta() * log_probs).mean()
 
         loss = q_loss + bc_loss + entropy_loss
 
@@ -156,4 +181,6 @@ class SACBCAgent(nn.Module):
 
     def update_target_critic(self) -> None:
         # TODO(student): Update target_critic using Polyak averaging with self.target_update_rate
-        ...
+        for target_param, param in zip(self.target_critic.parameters(), self.critic.parameters()):
+            target_param.data.copy_(target_param.data + self.target_update_rate * (param.data - target_param.data))
+
