@@ -70,6 +70,7 @@ env = {
     volumes={VOLUME_PATH: volume},
     timeout=60 * 60 * 12,
     retries=modal.Retries(initial_delay=0.0, max_retries=10),
+    secrets=[modal.Secret.from_name("wandb-secret")],
     env=env,
     image=image,
     gpu=DEFAULT_GPU,
